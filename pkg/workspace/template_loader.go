@@ -200,7 +200,7 @@ func (l *TemplateLoader) EvalYAML(libraryCtx LibraryExecutionContext, file *file
 		l.ui.Debugf("### template\n%s", compiledTemplate.DebugCodeAsString())
 	}
 
-	yamlCacheKey := "yaml:" + file.RelativePath()
+	yamlCacheKey := "yaml:" + file.Description()
 	if cached, ok := l.libraryExecFactory.getCachedProgram(yamlCacheKey); ok {
 		compiledTemplate.SetProgram(cached.prog)
 		compiledTemplate.SetInstructions(cached.instructions)
@@ -254,7 +254,7 @@ func (l *TemplateLoader) EvalText(libraryCtx LibraryExecutionContext, file *file
 		l.ui.Debugf("### template\n%s", compiledTemplate.DebugCodeAsString())
 	}
 
-	textCacheKey := "text:" + file.RelativePath()
+	textCacheKey := "text:" + file.Description()
 	if cached, ok := l.libraryExecFactory.getCachedProgram(textCacheKey); ok {
 		compiledTemplate.SetProgram(cached.prog)
 		compiledTemplate.SetInstructions(cached.instructions)
@@ -296,7 +296,7 @@ func (l *TemplateLoader) EvalStarlark(libraryCtx LibraryExecutionContext, file *
 		l.ui.Debugf("### template\n%s", compiledTemplate.DebugCodeAsString())
 	}
 
-	starCacheKey := "star:" + file.RelativePath()
+	starCacheKey := "star:" + file.Description()
 	if cached, ok := l.libraryExecFactory.getCachedProgram(starCacheKey); ok {
 		compiledTemplate.SetProgram(cached.prog)
 		compiledTemplate.SetInstructions(cached.instructions)
