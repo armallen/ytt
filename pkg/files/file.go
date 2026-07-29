@@ -92,11 +92,17 @@ func NewSortedFilesFromPaths(paths []string, opts SymlinkAllowOpts) ([]*File, er
 			}
 
 			if fileInfo.IsDir() {
-				err := filepath.Walk(path, func(walkedPath string, fi os.FileInfo, err error) error {
+				// Pre-resolve to an absolute path once so that LocalSource.RelativePath()
+				// does not call os.Getwd() for every file discovered during the walk.
+				absDir, err := filepath.Abs(filepath.Clean(path))
+				if err != nil {
+					return nil, fmt.Errorf("Resolving path '%s': %s", path, err)
+				}
+				err = filepath.Walk(absDir, func(walkedPath string, fi os.FileInfo, err error) error {
 					if err != nil || fi.IsDir() {
 						return err
 					}
-					regLocalSource, err := NewRegularFileLocalSource(walkedPath, path, fi, opts)
+					regLocalSource, err := NewRegularFileLocalSource(walkedPath, absDir, fi, opts)
 					if err != nil {
 						return err
 					}
@@ -174,6 +180,14 @@ func MustNewFileFromSource(fileSrc Source) *File {
 		panic(err)
 	}
 	return file
+}
+
+// Clone returns a new File that shares the same Source (and therefore the same
+// cached bytes) as r, but starts with no marks applied (MarkForOutput,
+// MarkTemplate, etc.).  The Source must be safe for concurrent use; use
+// NewCachedSource which now guards reads with sync.Once.
+func (r *File) Clone() *File {
+	return &File{src: r.src, relPath: r.relPath, order: r.order}
 }
 
 func (r *File) Description() string { return r.src.Description() }

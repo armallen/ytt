@@ -26,6 +26,29 @@ type CompiledTemplate struct {
 	evalDialects EvaluationCtxDialects
 	rootCtx      *EvaluationCtx
 	ctxs         []*EvaluationCtx
+
+	// prog is an optional pre-compiled Starlark program. When set, eval() skips
+	// parsing and compilation, reusing the program directly.
+	prog *starlark.Program
+}
+
+// SetProgram sets a pre-compiled Starlark program to reuse in eval(), bypassing
+// the parse and compile steps.
+func (e *CompiledTemplate) SetProgram(prog *starlark.Program) { e.prog = prog }
+
+// Program returns the compiled Starlark program after eval() has run, or nil if
+// eval() has not yet been called.
+func (e *CompiledTemplate) Program() *starlark.Program { return e.prog }
+
+// Instructions returns the InstructionSet whose names are embedded in this
+// template's generated code (and therefore in any compiled Program).
+func (e *CompiledTemplate) Instructions() *InstructionSet { return e.instructions }
+
+// SetInstructions replaces the InstructionSet used to build the globals dict in
+// Eval(). Must be called with the InstructionSet that was active when the
+// cached Program was originally compiled so that predeclared variable names match.
+func (e *CompiledTemplate) SetInstructions(instructions *InstructionSet) {
+	e.instructions = instructions
 }
 
 // NewCompiledTemplate creates a CompiledTemplate containing the generated code,
@@ -150,16 +173,21 @@ func (e *CompiledTemplate) eval(
 		}
 	}()
 
-	f, err := syntax.Parse(e.name, e.CodeAsString(), syntax.BlockScanner)
-	if err != nil {
-		return nil, nil, err
-	}
+	prog := e.prog
+	if prog == nil {
+		f, err := syntax.Parse(e.name, e.CodeAsString(), syntax.BlockScanner)
+		if err != nil {
+			return nil, nil, err
+		}
 
-	NewProgramAST(f, e.instructions).InsertTplCtxs()
+		NewProgramAST(f, e.instructions).InsertTplCtxs()
 
-	prog, err := starlark.FileProgram(f, globals.Has)
-	if err != nil {
-		return nil, nil, err
+		prog, err = starlark.FileProgram(f, globals.Has)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		e.prog = prog
 	}
 
 	// clear before execution

@@ -61,10 +61,9 @@ func (o Op) apply(left, right interface{}, parentMatchChildDefaults MatchChildDe
 		}
 
 		for _, item := range typedRight.Items {
-			item := item.DeepCopy()
-
 			op, err := whichOp(item)
 			if err == nil {
+				item = item.DeepCopy()
 				switch op {
 				case AnnotationMerge:
 					err = o.mergeMapItem(typedLeft, item, parentMatchChildDefaults)
@@ -91,10 +90,9 @@ func (o Op) apply(left, right interface{}, parentMatchChildDefaults MatchChildDe
 		}
 
 		for _, item := range typedRight.Items {
-			item := item.DeepCopy()
-
 			op, err := whichOp(item)
 			if err == nil {
+				item = item.DeepCopy()
 				switch op {
 				case AnnotationMerge:
 					err = o.mergeArrayItem(typedLeft, item, parentMatchChildDefaults)
@@ -132,10 +130,9 @@ func (o Op) applyDocSet(
 	parentMatchChildDefaults MatchChildDefaultsAnnotation) (bool, error) {
 
 	for _, doc := range typedRight.Items {
-		doc := doc.DeepCopy()
-
 		op, err := whichOp(doc)
 		if err == nil {
+			doc = doc.DeepCopy()
 			switch op {
 			case AnnotationMerge:
 				err = o.mergeDocument(typedLeft, doc, parentMatchChildDefaults)

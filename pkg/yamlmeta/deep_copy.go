@@ -18,7 +18,7 @@ func (a *Array) DeepCopyAsInterface() interface{}        { return a.DeepCopy() }
 func (ai *ArrayItem) DeepCopyAsInterface() interface{}   { return ai.DeepCopy() }
 
 func (ds *DocumentSet) DeepCopy() *DocumentSet {
-	var newItems []*Document
+	newItems := make([]*Document, 0, len(ds.Items))
 	for _, item := range ds.Items {
 		newItems = append(newItems, item.DeepCopy())
 	}
@@ -46,7 +46,7 @@ func (d *Document) DeepCopy() *Document {
 }
 
 func (m *Map) DeepCopy() *Map {
-	var newItems []*MapItem
+	newItems := make([]*MapItem, 0, len(m.Items))
 	for _, item := range m.Items {
 		newItems = append(newItems, item.DeepCopy())
 	}
@@ -72,7 +72,7 @@ func (mi *MapItem) DeepCopy() *MapItem {
 }
 
 func (a *Array) DeepCopy() *Array {
-	var newItems []*ArrayItem
+	newItems := make([]*ArrayItem, 0, len(a.Items))
 	for _, item := range a.Items {
 		newItems = append(newItems, item.DeepCopy())
 	}
@@ -101,7 +101,7 @@ func (n *Comment) DeepCopy() *Comment { return &(*n) }
 type CommentSlice []*Comment
 
 func (s CommentSlice) DeepCopy() CommentSlice {
-	var result []*Comment
+	result := make([]*Comment, 0, len(s))
 	for _, comment := range s {
 		result = append(result, comment.DeepCopy())
 	}

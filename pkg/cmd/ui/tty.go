@@ -42,6 +42,8 @@ func (t TTY) DebugWriter() io.Writer {
 	return noopWriter{}
 }
 
+func (t TTY) IsDebug() bool { return t.debug }
+
 type noopWriter struct{}
 
 var _ io.Writer = noopWriter{}
