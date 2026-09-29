@@ -163,49 +163,55 @@ func (l *TemplateLoader) EvalPlainYAML(file *files.File) (*yamlmeta.DocumentSet,
 //
 // Returns the templated file by evaluating the compiled starlark program.
 func (l *TemplateLoader) EvalYAML(libraryCtx LibraryExecutionContext, file *files.File) (starlark.StringDict, *yamlmeta.DocumentSet, error) {
-	docSet, err := l.EvalPlainYAML(file)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// is this plain YAML?
-	if !file.IsTemplate() && !file.IsLibrary() || !yamltemplate.HasTemplating(docSet) {
-		// YAML spec requires map keys to be unique.
-		// Tools retain just the last instance: each subsequent map item overrides the value of any previous.
-		docSet.OverrideMapKeys()
-
-		if l.ui.IsDebug() {
-			l.ui.Debugf("### ast (plain)\n")
-			docSet.Print(l.ui.DebugWriter())
-		}
-
-		return nil, docSet, nil
-	}
-
-	if l.ui.IsDebug() {
-		l.ui.Debugf("### ast (templated)\n")
-		docSet.Print(l.ui.DebugWriter())
-	}
-
 	tplOpts := yamltemplate.TemplateOpts{
 		IgnoreUnknownComments:   l.opts.IgnoreUnknownComments,
 		ImplicitMapKeyOverrides: l.opts.ImplicitMapKeyOverrides,
 	}
+	tplCacheKey := fmt.Sprintf("tpl:%s:%t:%t:%t:%t:%t", file.Description(), file.IsTemplate(), file.IsLibrary(),
+		tplOpts.IgnoreUnknownComments, tplOpts.ImplicitMapKeyOverrides, l.opts.StrictYAML)
 
-	compiledTemplate, err := yamltemplate.NewTemplate(file.RelativePath(), tplOpts).Compile(docSet)
-	if err != nil {
-		return nil, nil, fmt.Errorf("Compiling YAML template '%s': %s", file.RelativePath(), err)
+	var compiledTemplate *template.CompiledTemplate
+
+	if cached, ok := l.libraryExecFactory.getCachedTemplate(tplCacheKey); ok {
+		if cached.plainDocSet != nil {
+			return nil, cached.plainDocSet.DeepCopy(), nil
+		}
+		compiledTemplate = cached.compiled.CloneForEval()
+	} else {
+		docSet, err := l.EvalPlainYAML(file)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// is this plain YAML?
+		if !file.IsTemplate() && !file.IsLibrary() || !yamltemplate.HasTemplating(docSet) {
+			// YAML spec requires map keys to be unique.
+			// Tools retain just the last instance: each subsequent map item overrides the value of any previous.
+			docSet.OverrideMapKeys()
+
+			if l.ui.IsDebug() {
+				l.ui.Debugf("### ast (plain)\n")
+				docSet.Print(l.ui.DebugWriter())
+			}
+
+			l.libraryExecFactory.setCachedTemplate(tplCacheKey, &tplCacheEntry{plainDocSet: docSet.DeepCopy()})
+			return nil, docSet, nil
+		}
+
+		if l.ui.IsDebug() {
+			l.ui.Debugf("### ast (templated)\n")
+			docSet.Print(l.ui.DebugWriter())
+		}
+
+		compiledTemplate, err = yamltemplate.NewTemplate(file.RelativePath(), tplOpts).Compile(docSet)
+		if err != nil {
+			return nil, nil, fmt.Errorf("Compiling YAML template '%s': %s", file.RelativePath(), err)
+		}
 	}
 
 	l.addCompiledTemplate(file.RelativePath(), compiledTemplate)
 	if l.ui.IsDebug() {
 		l.ui.Debugf("### template\n%s", compiledTemplate.DebugCodeAsString())
-	}
-
-	yamlCacheKey := "yaml:" + file.Description()
-	if cached, ok := l.libraryExecFactory.getCachedProgram(yamlCacheKey); ok {
-		compiledTemplate.SetProgram(cached.prog)
-		compiledTemplate.SetInstructions(cached.instructions)
 	}
 
 	yttLibrary := yttlibrary.NewAPI(compiledTemplate.TplReplaceNode,
@@ -214,13 +220,15 @@ func (l *TemplateLoader) EvalYAML(libraryCtx LibraryExecutionContext, file *file
 
 	thread := l.newThread(libraryCtx, yttLibrary, file)
 
+	hadProgram := compiledTemplate.Program() != nil
+
 	globals, resultVal, err := compiledTemplate.Eval(thread, l)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if compiledTemplate.Program() != nil {
-		l.libraryExecFactory.setCachedProgram(yamlCacheKey, compiledTemplate.Program(), compiledTemplate.Instructions())
+	if !hadProgram && compiledTemplate.Program() != nil {
+		l.libraryExecFactory.setCachedTemplate(tplCacheKey, &tplCacheEntry{compiled: compiledTemplate.CloneForEval()})
 	}
 
 	return globals, resultVal.(*yamlmeta.DocumentSet), nil
