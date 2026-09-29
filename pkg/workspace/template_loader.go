@@ -29,6 +29,17 @@ type TemplateLoader struct {
 	opts               TemplateLoaderOpts
 	compiledTemplates  map[string]*template.CompiledTemplate
 	libraryExecFactory *LibraryExecutionFactory
+
+	// loaded holds the globals of library files evaluated by this loader, so
+	// a module referenced by several load() statements, or also collected as
+	// a library export, is evaluated once. Globals are frozen after
+	// evaluation, so sharing them is safe.
+	loaded map[loadedKey]starlark.StringDict
+}
+
+type loadedKey struct {
+	root, current *Library
+	file          string
 }
 
 // TemplateLoaderOpts holds configuration options that adjust how each individual template is executed/evaluated.
@@ -64,6 +75,7 @@ func NewTemplateLoader(values *datavalues.Envelope, libraryValuess []*datavalues
 		opts:               opts,
 		compiledTemplates:  map[string]*template.CompiledTemplate{},
 		libraryExecFactory: libraryExecFactory,
+		loaded:             map[loadedKey]starlark.StringDict{},
 	}
 }
 
@@ -123,21 +135,43 @@ func (l *TemplateLoader) Load(thread *starlark.Thread, module string) (starlark.
 			"(hint: library filename must end with '.lib.yml' or '.star'; use data.read(...) for loading non-templated file contents)", file.RelativePath())
 	}
 
+	return l.evalLibrary(libraryCtx, file)
+}
+
+// evalLibrary evaluates a library file (YAML, Starlark or text) and returns
+// its globals, reusing the result of a previous evaluation of the same file in
+// the same library context by this loader.
+func (l *TemplateLoader) evalLibrary(libraryCtx LibraryExecutionContext,
+	file *files.File,
+) (starlark.StringDict, error) {
+	key := loadedKey{
+		root:    libraryCtx.Root,
+		current: libraryCtx.Current,
+		file:    file.Description(),
+	}
+	if globals, ok := l.loaded[key]; ok {
+		return globals, nil
+	}
+
+	var globals starlark.StringDict
+	var err error
+
 	switch file.Type() {
 	case files.TypeYAML:
-		globals, _, err := l.EvalYAML(libraryCtx, file)
-		return globals, err
-
+		globals, _, err = l.EvalYAML(libraryCtx, file)
 	case files.TypeStarlark:
-		return l.EvalStarlark(libraryCtx, file)
-
+		globals, err = l.EvalStarlark(libraryCtx, file)
 	case files.TypeText:
-		globals, _, err := l.EvalText(libraryCtx, file)
-		return globals, err
-
+		globals, _, err = l.EvalText(libraryCtx, file)
 	default:
 		return nil, fmt.Errorf("File '%s' type is not a known", file.RelativePath())
 	}
+	if err != nil {
+		return nil, err
+	}
+
+	l.loaded[key] = globals
+	return globals, nil
 }
 
 func (l *TemplateLoader) EvalPlainYAML(file *files.File) (*yamlmeta.DocumentSet, error) {
