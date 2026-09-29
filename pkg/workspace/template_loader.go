@@ -289,27 +289,28 @@ func (l *TemplateLoader) EvalText(libraryCtx LibraryExecutionContext, file *file
 }
 
 func (l *TemplateLoader) EvalStarlark(libraryCtx LibraryExecutionContext, file *files.File) (starlark.StringDict, error) {
-	fileBs, err := file.Bytes()
-	if err != nil {
-		return nil, err
+	starCacheKey := "star:" + file.Description()
+
+	var compiledTemplate *template.CompiledTemplate
+	if cached, ok := l.libraryExecFactory.getCachedTemplate(starCacheKey); ok {
+		compiledTemplate = cached.compiled.CloneForEval()
+	} else {
+		fileBs, err := file.Bytes()
+		if err != nil {
+			return nil, err
+		}
+
+		l.ui.Debugf("## file %s\n", file.RelativePath())
+
+		instructions := template.NewInstructionSet()
+		compiledTemplate = template.NewCompiledTemplate(
+			file.RelativePath(), template.NewCodeFromBytes(fileBs, instructions),
+			instructions, template.NewNodes(), template.EvaluationCtxDialects{})
 	}
-
-	l.ui.Debugf("## file %s\n", file.RelativePath())
-
-	instructions := template.NewInstructionSet()
-	compiledTemplate := template.NewCompiledTemplate(
-		file.RelativePath(), template.NewCodeFromBytes(fileBs, instructions),
-		instructions, template.NewNodes(), template.EvaluationCtxDialects{})
 
 	l.addCompiledTemplate(file.RelativePath(), compiledTemplate)
 	if l.ui.IsDebug() {
 		l.ui.Debugf("### template\n%s", compiledTemplate.DebugCodeAsString())
-	}
-
-	starCacheKey := "star:" + file.Description()
-	if cached, ok := l.libraryExecFactory.getCachedProgram(starCacheKey); ok {
-		compiledTemplate.SetProgram(cached.prog)
-		compiledTemplate.SetInstructions(cached.instructions)
 	}
 
 	yttLibrary := yttlibrary.NewAPI(compiledTemplate.TplReplaceNode,
@@ -318,13 +319,15 @@ func (l *TemplateLoader) EvalStarlark(libraryCtx LibraryExecutionContext, file *
 
 	thread := l.newThread(libraryCtx, yttLibrary, file)
 
+	hadProgram := compiledTemplate.Program() != nil
+
 	globals, _, err := compiledTemplate.Eval(thread, l)
 	if err != nil {
 		return nil, fmt.Errorf("Evaluating starlark template: %s", err)
 	}
 
-	if compiledTemplate.Program() != nil {
-		l.libraryExecFactory.setCachedProgram(starCacheKey, compiledTemplate.Program(), compiledTemplate.Instructions())
+	if !hadProgram && compiledTemplate.Program() != nil {
+		l.libraryExecFactory.setCachedTemplate(starCacheKey, &tplCacheEntry{compiled: compiledTemplate.CloneForEval()})
 	}
 
 	return globals, nil
