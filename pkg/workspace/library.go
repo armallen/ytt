@@ -9,6 +9,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"sync"
 
 	"carvel.dev/ytt/pkg/files"
 )
@@ -22,6 +23,11 @@ type Library struct {
 	private  bool // in _ytt_lib
 	children []*Library
 	files    []*files.File
+
+	// filesByName indexes files by the last element of their relative path
+	// (first file wins, like a linear search would), built on first lookup.
+	filesByNameOnce sync.Once
+	filesByName     map[string]*files.File
 }
 
 func NewRootLibrary(fs []*files.File) *Library {
@@ -127,15 +133,30 @@ func (l *Library) FindFile(path string) (FileInLibrary, error) {
 		currLibrary = lib
 	}
 
-	for _, file := range currLibrary.files {
-		_, fileNamePiece := files.SplitPath(file.RelativePath())
-		if fileNamePiece == namePiece {
-			return FileInLibrary{File: file, Library: currLibrary}, nil
-		}
+	if file, found := currLibrary.findFileByName(namePiece); found {
+		return FileInLibrary{File: file, Library: currLibrary}, nil
 	}
 
 	return FileInLibrary{}, fmt.Errorf(
 		"Expected to find file '%s' (hint: only files included via -f flag are available)", path)
+}
+
+// findFileByName returns the first file of l whose name (last element of its
+// relative path) is name.
+func (l *Library) findFileByName(name string) (*files.File, bool) {
+	l.filesByNameOnce.Do(func() {
+		l.filesByName = make(map[string]*files.File, len(l.files))
+		for _, file := range l.files {
+			relPath := file.RelativePath()
+			// same separator as files.SplitPath
+			fileName := relPath[strings.LastIndex(relPath, "/")+1:]
+			if _, found := l.filesByName[fileName]; !found {
+				l.filesByName[fileName] = file
+			}
+		}
+	})
+	file, found := l.filesByName[name]
+	return file, found
 }
 
 type FileInLibrary struct {
