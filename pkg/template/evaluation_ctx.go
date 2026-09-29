@@ -36,6 +36,13 @@ type EvaluationNode interface {
 	DeepCopyAsInterface() interface{} // expects that result implements EvaluationNode
 }
 
+// valuelessCopier is optionally implemented by EvaluationNodes that can copy
+// themselves without their value/children, equivalent to DeepCopy()+ResetValue()
+// but without copying the subtree that would be discarded.
+type valuelessCopier interface {
+	CopyWithoutValueAsInterface() interface{}
+}
+
 type EvaluationCtxDialect interface {
 	PrepareNode(parentNode EvaluationNode, val EvaluationNode) error
 	SetMapItemKey(node EvaluationNode, val interface{}) error
@@ -204,8 +211,13 @@ func (e *EvaluationCtx) startNode(nodeTag NodeTag) error {
 		return fmt.Errorf("expected to find %s", nodeTag)
 	}
 
-	nodeVal := node.DeepCopyAsInterface().(EvaluationNode)
-	nodeVal.ResetValue()
+	var nodeVal EvaluationNode
+	if sc, ok := node.(valuelessCopier); ok {
+		nodeVal = sc.CopyWithoutValueAsInterface().(EvaluationNode)
+	} else {
+		nodeVal = node.DeepCopyAsInterface().(EvaluationNode)
+		nodeVal.ResetValue()
+	}
 
 	if nodeAnns, found := e.pendingAnnotations[nodeTag]; found {
 		delete(e.pendingAnnotations, nodeTag)
