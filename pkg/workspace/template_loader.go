@@ -335,6 +335,10 @@ func (l *TemplateLoader) newThread(libraryCtx LibraryExecutionContext,
 	l.setCurrentLibrary(thread, libraryCtx.Current)
 	l.setRootLibrary(thread, libraryCtx.Root)
 	l.setYTTLibrary(thread, yttLibrary)
+	if l.libraryExecFactory != nil {
+		yttlibrary.SetYAMLDecodeCache(thread,
+			l.libraryExecFactory.yamlDecodeCache)
+	}
 	return thread
 }
 
