@@ -34,6 +34,9 @@ func RegisterExt(mod *starlarkstruct.Module) {
 
 type API struct {
 	modules map[string]starlark.StringDict
+	// lazy holds constructors of modules that are costly to build and rarely
+	// loaded. FindModule builds each one on first load and moves it to modules.
+	lazy map[string]func() starlark.StringDict
 }
 
 // NewAPI builds an API instance to be used in executing a template.
@@ -43,9 +46,20 @@ func NewAPI(
 	libraryMod starlark.StringDict,
 	ui ui.UI) API {
 
+	lazy := map[string]func() starlark.StringDict{
+		"assert": func() starlark.StringDict {
+			return NewAssertModule().AsModule()
+		},
+		"math": func() starlark.StringDict {
+			return NewMathModule(ui).AsModule()
+		},
+		"template": func() starlark.StringDict {
+			return NewTemplateModule(replaceNodeFunc).AsModule()
+		},
+		"data": dataMod.AsModule,
+	}
+
 	std := map[string]starlark.StringDict{
-		"assert": NewAssertModule().AsModule(),
-		"math":   NewMathModule(ui).AsModule(),
 		"regexp": RegexpAPI,
 
 		// Hashes
@@ -58,10 +72,6 @@ func NewAPI(
 		"yaml":   YAMLAPI,
 		"url":    URLAPI,
 		"ip":     IPAPI,
-
-		// Templating
-		"template": NewTemplateModule(replaceNodeFunc).AsModule(),
-		"data":     dataMod.AsModule(),
 
 		// Object building
 		"struct":  StructAPI,
@@ -76,18 +86,25 @@ func NewAPI(
 
 	for _, ext := range registeredExts {
 		// Double check that we are not overriding predefined library
-		if _, found := std[ext.Name]; found {
+		if _, found := std[ext.Name]; found || lazy[ext.Name] != nil {
 			panic("Internal inconsistency: shadowing ytt library with an extension module")
 		}
 		std[ext.Name] = starlark.StringDict{ext.Name: ext}
 	}
 
-	return API{std}
+	return API{modules: std, lazy: lazy}
 }
 
 func (a API) FindModule(module string) (starlark.StringDict, error) {
 	if module, found := a.modules[module]; found {
 		return module, nil
+	}
+	if ctor, found := a.lazy[module]; found {
+		// Copies of API share both maps, so they all see the built module.
+		built := ctor()
+		a.modules[module] = built
+		delete(a.lazy, module)
+		return built, nil
 	}
 	return nil, fmt.Errorf("builtin ytt library does not have module '%s' "+
 		"(hint: is it available in newer version of ytt?)", module)
