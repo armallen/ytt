@@ -246,36 +246,18 @@ func (ll *LibraryExecution) eval(values *datavalues.Envelope, libraryValues []*d
 
 		case fileInLib.File.IsLibrary():
 			// Collect globals produced by library files
-			var evalFunc func(LibraryExecutionContext, *files.File) (starlark.StringDict, error)
-
 			switch fileInLib.File.Type() {
-			case files.TypeYAML:
-				evalFunc = func(libraryCtx LibraryExecutionContext, file *files.File) (starlark.StringDict, error) {
-					globals, _, err := loader.EvalYAML(libraryCtx, fileInLib.File)
-					return globals, err
-				}
-
-			case files.TypeText:
-				evalFunc = func(libraryCtx LibraryExecutionContext, file *files.File) (starlark.StringDict, error) {
-					globals, _, err := loader.EvalText(libraryCtx, fileInLib.File)
-					return globals, err
-				}
-
-			case files.TypeStarlark:
-				evalFunc = loader.EvalStarlark
-
-			default:
-				// TODO should we allow skipping over unknown library files?
-				// do nothing
-			}
-
-			if evalFunc != nil {
-				globals, err := evalFunc(libraryCtx, fileInLib.File)
+			case files.TypeYAML, files.TypeText, files.TypeStarlark:
+				globals, err := loader.evalLibrary(libraryCtx, fileInLib.File)
 				if err != nil {
 					return nil, nil, nil, err
 				}
 
 				exports = append(exports, EvalExport{Path: fileInLib.RelativePath(), Symbols: globals})
+
+			default:
+				// TODO should we allow skipping over unknown library files?
+				// do nothing
 			}
 
 		default:
