@@ -5,6 +5,7 @@ package yttlibrary
 
 import (
 	"fmt"
+	"sync"
 
 	"carvel.dev/ytt/pkg/template/core"
 	"carvel.dev/ytt/pkg/yamlmeta"
@@ -88,13 +89,54 @@ func (b yamlModule) starlarkDecode(_ *starlark.Thread, _ *starlark.Builtin, args
 }
 
 func (b yamlModule) Decode(yamlString string) (starlark.Value, error) {
-	var decoded interface{}
-
-	err := yamlmeta.PlainUnmarshal([]byte(yamlString), &decoded)
+	decoded, err := decodeCached(yamlString)
 	if err != nil {
 		return starlark.None, err
 	}
 
 	value := core.NewGoValue(decoded).AsStarlarkValue()
 	return value, nil
+}
+
+const (
+	decodeCacheMinLen   = 1 << 10   // smaller inputs are cheap to parse
+	decodeCacheMaxBytes = 256 << 20 // total size of cached inputs
+)
+
+// decodeCache memoizes the parse of large YAML strings. Templates commonly
+// decode the same data file (via data.read) in every evaluation. The parsed
+// values are never modified: each Decode converts them into new Starlark
+// values, which callers may mutate.
+var decodeCache = struct {
+	sync.Mutex
+	entries map[string]interface{}
+	bytes   int
+}{entries: map[string]interface{}{}}
+
+func decodeCached(yamlString string) (interface{}, error) {
+	cacheable := len(yamlString) >= decodeCacheMinLen
+	if cacheable {
+		decodeCache.Lock()
+		decoded, ok := decodeCache.entries[yamlString]
+		decodeCache.Unlock()
+		if ok {
+			return decoded, nil
+		}
+	}
+
+	var decoded interface{}
+	if err := yamlmeta.PlainUnmarshal([]byte(yamlString), &decoded); err != nil {
+		return nil, err
+	}
+
+	if cacheable {
+		decodeCache.Lock()
+		if _, ok := decodeCache.entries[yamlString]; !ok && decodeCache.bytes+len(yamlString) <= decodeCacheMaxBytes {
+			decodeCache.entries[yamlString] = decoded
+			decodeCache.bytes += len(yamlString)
+		}
+		decodeCache.Unlock()
+	}
+
+	return decoded, nil
 }
