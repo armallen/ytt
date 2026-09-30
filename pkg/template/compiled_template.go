@@ -75,6 +75,20 @@ func NewCompiledTemplate(name string, code []Line,
 	}
 }
 
+// CloneForEval returns a fresh CompiledTemplate that shares the immutable
+// parts (code, instructions, nodes, dialects, compiled program) with e but has
+// its own evaluation state, so it can be evaluated concurrently with other clones.
+func (e *CompiledTemplate) CloneForEval() *CompiledTemplate {
+	return &CompiledTemplate{
+		name:         e.name,
+		code:         e.code,
+		instructions: e.instructions,
+		nodes:        e.nodes,
+		evalDialects: e.evalDialects,
+		prog:         e.prog,
+	}
+}
+
 func (e *CompiledTemplate) Code() []Line { return e.code }
 
 func (e *CompiledTemplate) CodeAtLine(pos *filepos.Position) *Line {

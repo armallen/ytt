@@ -8,6 +8,7 @@ import (
 
 	"carvel.dev/ytt/pkg/cmd/ui"
 	"carvel.dev/ytt/pkg/template"
+	"carvel.dev/ytt/pkg/yamlmeta"
 	"github.com/k14s/starlark-go/starlark"
 )
 
@@ -36,6 +37,11 @@ type LibraryExecutionFactory struct {
 	// programs are reused across all components processed within a single cfgen run.
 	progCacheMu *sync.RWMutex
 	progCache   map[string]*progCacheEntry
+
+	// tplCache holds parsed+compiled YAML templates (or parsed plain YAML) keyed
+	// by file, shared across derived factories like progCache.
+	tplCacheMu *sync.RWMutex
+	tplCache   map[string]*tplCacheEntry
 }
 
 // NewLibraryExecutionFactory configures a new instance of a LibraryExecutionFactory.
@@ -46,6 +52,8 @@ func NewLibraryExecutionFactory(ui ui.UI, templateLoaderOpts TemplateLoaderOpts,
 		skipDataValuesValidation: skipDataValuesValidation,
 		progCacheMu:              &sync.RWMutex{},
 		progCache:                map[string]*progCacheEntry{},
+		tplCacheMu:               &sync.RWMutex{},
+		tplCache:                 map[string]*tplCacheEntry{},
 	}
 }
 
@@ -62,12 +70,34 @@ func (f *LibraryExecutionFactory) setCachedProgram(path string, prog *starlark.P
 	f.progCache[path] = &progCacheEntry{prog: prog, instructions: instructions}
 }
 
+// tplCacheEntry is either a plain (non-templated) YAML document set, or a
+// compiled template whose Program has already been built.
+type tplCacheEntry struct {
+	plainDocSet *yamlmeta.DocumentSet
+	compiled    *template.CompiledTemplate
+}
+
+func (f *LibraryExecutionFactory) getCachedTemplate(key string) (*tplCacheEntry, bool) {
+	f.tplCacheMu.RLock()
+	defer f.tplCacheMu.RUnlock()
+	entry, ok := f.tplCache[key]
+	return entry, ok
+}
+
+func (f *LibraryExecutionFactory) setCachedTemplate(key string, entry *tplCacheEntry) {
+	f.tplCacheMu.Lock()
+	defer f.tplCacheMu.Unlock()
+	f.tplCache[key] = entry
+}
+
 // WithTemplateLoaderOptsOverrides produces a new LibraryExecutionFactory identical to this one, except it configures
 // its TemplateLoader with the merge of the supplied TemplateLoaderOpts over this factory's configuration.
 func (f *LibraryExecutionFactory) WithTemplateLoaderOptsOverrides(overrides TemplateLoaderOptsOverrides) *LibraryExecutionFactory {
 	newF := NewLibraryExecutionFactory(f.ui, f.templateLoaderOpts.Merge(overrides), f.skipDataValuesValidation)
 	newF.progCacheMu = f.progCacheMu
 	newF.progCache = f.progCache
+	newF.tplCacheMu = f.tplCacheMu
+	newF.tplCache = f.tplCache
 	return newF
 }
 
@@ -81,6 +111,8 @@ func (f *LibraryExecutionFactory) ThatSkipsDataValuesValidations(skipDataValuesV
 	newF := NewLibraryExecutionFactory(f.ui, f.templateLoaderOpts, f.skipDataValuesValidation || skipDataValuesValidation)
 	newF.progCacheMu = f.progCacheMu
 	newF.progCache = f.progCache
+	newF.tplCacheMu = f.tplCacheMu
+	newF.tplCache = f.tplCache
 	return newF
 }
 
