@@ -202,6 +202,12 @@ func (l *TemplateLoader) EvalYAML(libraryCtx LibraryExecutionContext, file *file
 		l.ui.Debugf("### template\n%s", compiledTemplate.DebugCodeAsString())
 	}
 
+	cacheKey := "yaml:" + file.Description()
+	if cached, ok := l.libraryExecFactory.getCachedProgram(cacheKey); ok {
+		compiledTemplate.SetProgram(cached.prog)
+		compiledTemplate.SetInstructions(cached.instructions)
+	}
+
 	yttLibrary := yttlibrary.NewAPI(compiledTemplate.TplReplaceNode,
 		yttlibrary.NewDataModule(l.values, DataLoader{libraryCtx}),
 		NewLibraryModule(libraryCtx, l.libraryExecFactory, l.libraryValuess, l.librarySchemas).AsModule(), l.ui)
@@ -211,6 +217,10 @@ func (l *TemplateLoader) EvalYAML(libraryCtx LibraryExecutionContext, file *file
 	globals, resultVal, err := compiledTemplate.Eval(thread, l)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	if compiledTemplate.Program() != nil {
+		l.libraryExecFactory.setCachedProgram(cacheKey, compiledTemplate.Program(), compiledTemplate.Instructions())
 	}
 
 	return globals, resultVal.(*yamlmeta.DocumentSet), nil
@@ -246,6 +256,12 @@ func (l *TemplateLoader) EvalText(libraryCtx LibraryExecutionContext, file *file
 		l.ui.Debugf("### template\n%s", compiledTemplate.DebugCodeAsString())
 	}
 
+	cacheKey := "text:" + file.Description()
+	if cached, ok := l.libraryExecFactory.getCachedProgram(cacheKey); ok {
+		compiledTemplate.SetProgram(cached.prog)
+		compiledTemplate.SetInstructions(cached.instructions)
+	}
+
 	yttLibrary := yttlibrary.NewAPI(compiledTemplate.TplReplaceNode,
 		yttlibrary.NewDataModule(l.values, DataLoader{libraryCtx}),
 		NewLibraryModule(libraryCtx, l.libraryExecFactory, l.libraryValuess, l.librarySchemas).AsModule(), l.ui)
@@ -255,6 +271,10 @@ func (l *TemplateLoader) EvalText(libraryCtx LibraryExecutionContext, file *file
 	globals, resultVal, err := compiledTemplate.Eval(thread, l)
 	if err != nil {
 		return nil, nil, fmt.Errorf("Evaluating text template: %s", err)
+	}
+
+	if compiledTemplate.Program() != nil {
+		l.libraryExecFactory.setCachedProgram(cacheKey, compiledTemplate.Program(), compiledTemplate.Instructions())
 	}
 
 	return globals, resultVal.(*texttemplate.NodeRoot), nil
@@ -278,6 +298,12 @@ func (l *TemplateLoader) EvalStarlark(libraryCtx LibraryExecutionContext, file *
 		l.ui.Debugf("### template\n%s", compiledTemplate.DebugCodeAsString())
 	}
 
+	cacheKey := "star:" + file.Description()
+	if cached, ok := l.libraryExecFactory.getCachedProgram(cacheKey); ok {
+		compiledTemplate.SetProgram(cached.prog)
+		compiledTemplate.SetInstructions(cached.instructions)
+	}
+
 	yttLibrary := yttlibrary.NewAPI(compiledTemplate.TplReplaceNode,
 		yttlibrary.NewDataModule(l.values, DataLoader{libraryCtx}),
 		NewLibraryModule(libraryCtx, l.libraryExecFactory, l.libraryValuess, l.librarySchemas).AsModule(), l.ui)
@@ -287,6 +313,10 @@ func (l *TemplateLoader) EvalStarlark(libraryCtx LibraryExecutionContext, file *
 	globals, _, err := compiledTemplate.Eval(thread, l)
 	if err != nil {
 		return nil, fmt.Errorf("Evaluating starlark template: %s", err)
+	}
+
+	if compiledTemplate.Program() != nil {
+		l.libraryExecFactory.setCachedProgram(cacheKey, compiledTemplate.Program(), compiledTemplate.Instructions())
 	}
 
 	return globals, nil
