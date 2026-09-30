@@ -180,6 +180,15 @@ func MustNewFileFromSource(fileSrc Source) *File {
 	return file
 }
 
+// Clone returns a new File that shares r's Source (and so any bytes it has
+// cached) but has none of r's marks (MarkForOutput, MarkTemplate, ...). It lets
+// an embedder list files once and evaluate them many times, concurrently, with
+// independent marks. The Source must be safe for concurrent use, as
+// CachedSource is.
+func (r *File) Clone() *File {
+	return &File{src: r.src, relPath: r.relPath, order: r.order}
+}
+
 func (r *File) Description() string { return r.src.Description() }
 
 func (r *File) OriginalRelativePath() string { return r.relPath }
