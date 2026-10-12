@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"carvel.dev/ytt/pkg/files"
@@ -81,4 +83,35 @@ type RoundTripFunc func(req *http.Request) *http.Response
 
 func (f RoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req), nil
+}
+
+// countingSource returns the same bytes on every read and counts the reads.
+type countingSource struct {
+	reads atomic.Int32
+}
+
+func (s *countingSource) Description() string           { return "counting" }
+func (s *countingSource) RelativePath() (string, error) { return "counting.yml", nil }
+func (s *countingSource) Bytes() ([]byte, error) {
+	s.reads.Add(1)
+	return []byte("data"), nil
+}
+
+func TestCachedSourceConcurrentBytes(t *testing.T) {
+	src := &countingSource{}
+	cached := files.NewCachedSource(src)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			bs, err := cached.Bytes()
+			require.NoError(t, err)
+			require.Equal(t, []byte("data"), bs)
+		}()
+	}
+	wg.Wait()
+
+	require.Equal(t, int32(1), src.reads.Load(), "underlying source must be read exactly once")
 }
