@@ -6,6 +6,7 @@ package template
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 )
 
 type InstructionSet struct {
@@ -20,13 +21,14 @@ type InstructionSet struct {
 	ReplaceNode           InstructionOp
 }
 
-var (
-	globalInsSetID = 1
-)
+// globalInsSetID numbers instruction sets so that their names are unique. It
+// is incremented atomically because templates may be compiled concurrently.
+var globalInsSetID atomic.Int64
+
+func init() { globalInsSetID.Store(1) }
 
 func NewInstructionSet() *InstructionSet {
-	globalInsSetID++
-	uniqueID := globalInsSetID
+	uniqueID := globalInsSetID.Add(1)
 	return &InstructionSet{
 		SetCtxType:            InstructionOp{fmt.Sprintf("__ytt_tpl%d_set_ctx_type", uniqueID)},
 		StartCtx:              InstructionOp{fmt.Sprintf("__ytt_tpl%d_start_ctx", uniqueID)},
