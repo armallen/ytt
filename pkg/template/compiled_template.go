@@ -28,13 +28,10 @@ type CompiledTemplate struct {
 	ctxs         []*EvaluationCtx
 }
 
-// NewCompiledTemplate creates a CompiledTemplate containing the generated code,
-// InstructionSet, and Nodes needed to template the resulting document.
-func NewCompiledTemplate(name string, code []Line,
-	instructions *InstructionSet, nodes *Nodes,
-	evalDialects EvaluationCtxDialects) *CompiledTemplate {
-
-	// TODO package globals
+// init enables the Starlark dialect features ytt accepts. starlark-go reads
+// them from package globals, so they are set once, before any template is
+// compiled, and templates can be compiled and evaluated concurrently.
+func init() {
 	resolve.AllowFloat = true
 	resolve.AllowSet = true
 	resolve.AllowLambda = true
@@ -42,6 +39,13 @@ func NewCompiledTemplate(name string, code []Line,
 	resolve.AllowBitwise = true
 	resolve.AllowRecursion = true
 	resolve.AllowGlobalReassign = true
+}
+
+// NewCompiledTemplate creates a CompiledTemplate containing the generated code,
+// InstructionSet, and Nodes needed to template the resulting document.
+func NewCompiledTemplate(name string, code []Line,
+	instructions *InstructionSet, nodes *Nodes,
+	evalDialects EvaluationCtxDialects) *CompiledTemplate {
 
 	return &CompiledTemplate{
 		name:         name,

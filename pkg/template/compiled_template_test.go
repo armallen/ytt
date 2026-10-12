@@ -5,6 +5,7 @@ package template_test
 
 import (
 	"strings"
+	"sync"
 	"testing"
 
 	"carvel.dev/ytt/pkg/template"
@@ -38,6 +39,48 @@ a = hello()
 	if resultVal != nil {
 		t.Fatalf("Expected result val to be nil, but was %#v", resultVal)
 	}
+}
+
+func TestEvalConcurrentTemplates(t *testing.T) {
+	// Uses features gated by Starlark dialect flags: floats, sets, lambdas and
+	// global reassignment.
+	data := `
+a = 1.5
+a = sorted(set([3, 1]))
+f = lambda x: x * 2
+b = f(a[0])
+`
+	// Instruction sets are created up front: this test is about compiling and
+	// evaluating templates concurrently.
+	const n = 20
+	instructionSets := make([]*template.InstructionSet, n)
+	for i := range instructionSets {
+		instructionSets[i] = template.NewInstructionSet()
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(instructions *template.InstructionSet) {
+			defer wg.Done()
+			compiledTemplate := template.NewCompiledTemplate(
+				"stdin", template.NewCodeFromBytes([]byte(data), instructions),
+				instructions, template.NewNodes(), template.EvaluationCtxDialects{})
+
+			loader := template.NoopCompiledTemplateLoader{}
+			thread := &starlark.Thread{Name: "test", Load: loader.Load}
+
+			resultGlobals, _, err := compiledTemplate.Eval(thread, loader)
+			if err != nil {
+				t.Errorf("Evaluating starlark template: %s", err)
+				return
+			}
+			if resultGlobals["b"] != starlark.MakeInt(2) {
+				t.Errorf("Expected b to be 2, but was %#v", resultGlobals["b"])
+			}
+		}(instructionSets[i])
+	}
+	wg.Wait()
 }
 
 func TestEvalIgnoresIndentationInStarlark(t *testing.T) {
