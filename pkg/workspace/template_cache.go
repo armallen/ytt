@@ -8,11 +8,13 @@ import (
 
 	"carvel.dev/ytt/pkg/files"
 	"carvel.dev/ytt/pkg/template"
+	"carvel.dev/ytt/pkg/yamlmeta"
 )
 
-// TemplateCache keeps compiled template files, so that evaluations sharing it
-// skip parsing and compiling files they have already seen. Data values,
-// overlays and other evaluation state are not cached.
+// TemplateCache keeps compiled template files, and the documents of plain YAML
+// files, so that evaluations sharing it skip parsing and compiling files they
+// have already seen. Data values, overlays and other evaluation state are not
+// cached.
 //
 // Entries are keyed by file description (e.g. its path), not by content:
 // files must not change while a TemplateCache is in use. Create a new
@@ -23,12 +25,14 @@ import (
 type TemplateCache struct {
 	mu        sync.RWMutex
 	templates map[templateKey]*template.CompiledTemplate
+	plainYAML map[templateKey]*yamlmeta.DocumentSet
 }
 
 // NewTemplateCache returns an empty TemplateCache.
 func NewTemplateCache() *TemplateCache {
 	return &TemplateCache{
 		templates: map[templateKey]*template.CompiledTemplate{},
+		plainYAML: map[templateKey]*yamlmeta.DocumentSet{},
 	}
 }
 
@@ -37,6 +41,7 @@ type templateKind string
 
 const (
 	starlarkTemplate templateKind = "starlark"
+	yamlTemplate     templateKind = "yaml"
 )
 
 // templateKey identifies a file and everything that changes how it compiles.
@@ -90,4 +95,32 @@ func (c *TemplateCache) storeTemplate(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.templates[key] = tpl.CloneForEval()
+}
+
+// lookupPlainYAML returns a copy of the plain YAML documents cached under key.
+func (c *TemplateCache) lookupPlainYAML(
+	key templateKey,
+) (*yamlmeta.DocumentSet, bool) {
+	if c == nil {
+		return nil, false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	docSet, ok := c.plainYAML[key]
+	if !ok {
+		return nil, false
+	}
+	return docSet.DeepCopy(), true
+}
+
+// storePlainYAML caches a copy of docSet, the documents of a plain YAML file.
+func (c *TemplateCache) storePlainYAML(
+	key templateKey, docSet *yamlmeta.DocumentSet,
+) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.plainYAML[key] = docSet.DeepCopy()
 }

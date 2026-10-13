@@ -124,6 +124,27 @@ func TestTemplateCacheKeysByFileDescription(t *testing.T) {
 	}
 }
 
+// Loader options that change how a file compiles are part of the cache key:
+// a template compiled while ignoring unknown comments isn't reused by a
+// factory that rejects them.
+func TestTemplateCacheKeysByLoaderOpts(t *testing.T) {
+	cache := workspace.NewTemplateCache()
+	lenient := workspace.NewLibraryExecutionFactory(ui.NewTTY(false),
+		workspace.TemplateLoaderOpts{IgnoreUnknownComments: true}, true).
+		WithTemplateCache(cache)
+	strict := newFactory(cache)
+	dir := writeTree(t, map[string]string{
+		"template.yml": "# not a ytt comment\nid: #@ 1\n",
+	})
+
+	if _, err := evalLibrary(lenient, dir, 0); err != nil {
+		t.Fatalf("expected no error ignoring unknown comments, got: %s", err)
+	}
+	if _, err := evalLibrary(strict, dir, 0); err == nil {
+		t.Fatal("expected an error for the unknown comment")
+	}
+}
+
 func newFactory(
 	cache *workspace.TemplateCache,
 ) *workspace.LibraryExecutionFactory {
