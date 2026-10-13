@@ -193,15 +193,8 @@ func (l *TemplateLoader) EvalYAML(libraryCtx LibraryExecutionContext, file *file
 		return nil, nil, fmt.Errorf("Compiling YAML template '%s': %s", file.RelativePath(), err)
 	}
 
-	l.addCompiledTemplate(file.RelativePath(), compiledTemplate)
-
-	yttLibrary := yttlibrary.NewAPI(compiledTemplate.TplReplaceNode,
-		yttlibrary.NewDataModule(l.values, DataLoader{libraryCtx}),
-		NewLibraryModule(libraryCtx, l.libraryExecFactory, l.libraryValuess, l.librarySchemas).AsModule(), l.ui)
-
-	thread := l.newThread(libraryCtx, yttLibrary, file)
-
-	globals, resultVal, err := compiledTemplate.Eval(thread, l)
+	globals, resultVal, err := l.evalTemplate(
+		libraryCtx, file, compiledTemplate)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -236,15 +229,8 @@ func (l *TemplateLoader) EvalText(libraryCtx LibraryExecutionContext, file *file
 		return nil, nil, fmt.Errorf("Compiling text template '%s': %s", file.RelativePath(), err)
 	}
 
-	l.addCompiledTemplate(file.RelativePath(), compiledTemplate)
-
-	yttLibrary := yttlibrary.NewAPI(compiledTemplate.TplReplaceNode,
-		yttlibrary.NewDataModule(l.values, DataLoader{libraryCtx}),
-		NewLibraryModule(libraryCtx, l.libraryExecFactory, l.libraryValuess, l.librarySchemas).AsModule(), l.ui)
-
-	thread := l.newThread(libraryCtx, yttLibrary, file)
-
-	globals, resultVal, err := compiledTemplate.Eval(thread, l)
+	globals, resultVal, err := l.evalTemplate(
+		libraryCtx, file, compiledTemplate)
 	if err != nil {
 		return nil, nil, fmt.Errorf("Evaluating text template: %s", err)
 	}
@@ -253,6 +239,32 @@ func (l *TemplateLoader) EvalText(libraryCtx LibraryExecutionContext, file *file
 }
 
 func (l *TemplateLoader) EvalStarlark(libraryCtx LibraryExecutionContext, file *files.File) (starlark.StringDict, error) {
+	key := newTemplateKey(starlarkTemplate, file, l.opts)
+	cache := l.libraryExecFactory.templateCache
+
+	compiledTemplate, cached := cache.lookupTemplate(key)
+	if !cached {
+		var err error
+		compiledTemplate, err = l.compileStarlark(file)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	globals, _, err := l.evalTemplate(libraryCtx, file, compiledTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("Evaluating starlark template: %s", err)
+	}
+
+	if !cached {
+		cache.storeTemplate(key, compiledTemplate)
+	}
+	return globals, nil
+}
+
+func (l *TemplateLoader) compileStarlark(
+	file *files.File,
+) (*template.CompiledTemplate, error) {
 	fileBs, err := file.Bytes()
 	if err != nil {
 		return nil, err
@@ -269,21 +281,26 @@ func (l *TemplateLoader) EvalStarlark(libraryCtx LibraryExecutionContext, file *
 			filepos.NewPositionInFile(1, file.RelativePath()),
 			instructions),
 		instructions, template.NewNodes(), template.EvaluationCtxDialects{})
+	return compiledTemplate, nil
+}
 
-	l.addCompiledTemplate(file.RelativePath(), compiledTemplate)
+// evalTemplate evaluates tpl, compiled from file, in libraryCtx.
+func (l *TemplateLoader) evalTemplate(
+	libraryCtx LibraryExecutionContext,
+	file *files.File,
+	tpl *template.CompiledTemplate,
+) (starlark.StringDict, any, error) {
+	l.addCompiledTemplate(file.RelativePath(), tpl)
 
-	yttLibrary := yttlibrary.NewAPI(compiledTemplate.TplReplaceNode,
+	libraryModule := NewLibraryModule(libraryCtx, l.libraryExecFactory,
+		l.libraryValuess, l.librarySchemas)
+	yttLibrary := yttlibrary.NewAPI(tpl.TplReplaceNode,
 		yttlibrary.NewDataModule(l.values, DataLoader{libraryCtx}),
-		NewLibraryModule(libraryCtx, l.libraryExecFactory, l.libraryValuess, l.librarySchemas).AsModule(), l.ui)
+		libraryModule.AsModule(), l.ui)
 
 	thread := l.newThread(libraryCtx, yttLibrary, file)
 
-	globals, _, err := compiledTemplate.Eval(thread, l)
-	if err != nil {
-		return nil, fmt.Errorf("Evaluating starlark template: %s", err)
-	}
-
-	return globals, nil
+	return tpl.Eval(thread, l)
 }
 
 const (

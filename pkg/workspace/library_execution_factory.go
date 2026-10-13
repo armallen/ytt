@@ -19,17 +19,39 @@ type LibraryExecutionFactory struct {
 	templateLoaderOpts TemplateLoaderOpts
 
 	skipDataValuesValidation bool
+
+	// templateCache, when set, keeps compiled templates across evaluations.
+	// Derived factories share it.
+	templateCache *TemplateCache
 }
 
 // NewLibraryExecutionFactory configures a new instance of a LibraryExecutionFactory.
 func NewLibraryExecutionFactory(ui ui.UI, templateLoaderOpts TemplateLoaderOpts, skipDataValuesValidation bool) *LibraryExecutionFactory {
-	return &LibraryExecutionFactory{ui, templateLoaderOpts, skipDataValuesValidation}
+	return &LibraryExecutionFactory{
+		ui:                       ui,
+		templateLoaderOpts:       templateLoaderOpts,
+		skipDataValuesValidation: skipDataValuesValidation,
+	}
+}
+
+// WithTemplateCache produces a new LibraryExecutionFactory identical to this
+// one, except it keeps compiled template files in cache and reuses them in
+// every evaluation it, or a factory derived from it, produces. See
+// TemplateCache for what this assumes. A nil cache disables caching.
+func (f *LibraryExecutionFactory) WithTemplateCache(
+	cache *TemplateCache,
+) *LibraryExecutionFactory {
+	newF := *f
+	newF.templateCache = cache
+	return &newF
 }
 
 // WithTemplateLoaderOptsOverrides produces a new LibraryExecutionFactory identical to this one, except it configures
 // its TemplateLoader with the merge of the supplied TemplateLoaderOpts over this factory's configuration.
 func (f *LibraryExecutionFactory) WithTemplateLoaderOptsOverrides(overrides TemplateLoaderOptsOverrides) *LibraryExecutionFactory {
-	return NewLibraryExecutionFactory(f.ui, f.templateLoaderOpts.Merge(overrides), f.skipDataValuesValidation)
+	newF := *f
+	newF.templateLoaderOpts = f.templateLoaderOpts.Merge(overrides)
+	return &newF
 }
 
 // ThatSkipsDataValuesValidations produces a new LibraryExecutionFactory identical to this one, except it might also
@@ -39,7 +61,10 @@ func (f *LibraryExecutionFactory) WithTemplateLoaderOptsOverrides(overrides Temp
 // no effect. This stems from the assumption that the downstream user is the most informed whether validations ought to
 // be run.
 func (f *LibraryExecutionFactory) ThatSkipsDataValuesValidations(skipDataValuesValidation bool) *LibraryExecutionFactory {
-	return NewLibraryExecutionFactory(f.ui, f.templateLoaderOpts, f.skipDataValuesValidation || skipDataValuesValidation)
+	newF := *f
+	newF.skipDataValuesValidation = f.skipDataValuesValidation ||
+		skipDataValuesValidation
+	return &newF
 }
 
 // New produces a new instance of a LibraryExecution, set with the configuration and dependencies of this factory.

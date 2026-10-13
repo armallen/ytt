@@ -26,6 +26,9 @@ type CompiledTemplate struct {
 	evalDialects EvaluationCtxDialects
 	rootCtx      *EvaluationCtx
 	ctxs         []*EvaluationCtx
+
+	// prog is the compiled Starlark program, set by the first evaluation.
+	prog *starlark.Program
 }
 
 // NewCompiledTemplate creates a CompiledTemplate containing the generated code,
@@ -49,6 +52,21 @@ func NewCompiledTemplate(name string, code []Line,
 		instructions: instructions,
 		nodes:        nodes,
 		evalDialects: evalDialects,
+	}
+}
+
+// CloneForEval returns a CompiledTemplate that shares the code, instructions,
+// nodes, dialects and compiled program of e, and has its own evaluation state.
+// Clones can be evaluated concurrently, as evaluation does not modify what
+// they share.
+func (e *CompiledTemplate) CloneForEval() *CompiledTemplate {
+	return &CompiledTemplate{
+		name:         e.name,
+		code:         e.code,
+		instructions: e.instructions,
+		nodes:        e.nodes,
+		evalDialects: e.evalDialects,
+		prog:         e.prog,
 	}
 }
 
@@ -150,23 +168,19 @@ func (e *CompiledTemplate) eval(
 		}
 	}()
 
-	f, err := syntax.Parse(e.name, e.CodeAsString(), syntax.BlockScanner)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	NewProgramAST(f, e.instructions).InsertTplCtxs()
-
-	prog, err := starlark.FileProgram(f, globals.Has)
-	if err != nil {
-		return nil, nil, err
+	if e.prog == nil {
+		prog, err := e.compile(globals)
+		if err != nil {
+			return nil, nil, err
+		}
+		e.prog = prog
 	}
 
 	// clear before execution
 	e.rootCtx = nil
 	e.ctxs = nil
 
-	updatedGlobals, err := prog.Init(thread, globals)
+	updatedGlobals, err := e.prog.Init(thread, globals)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -183,6 +197,20 @@ func (e *CompiledTemplate) eval(
 	}
 
 	return updatedGlobals, resultVal, nil
+}
+
+// compile parses and compiles the generated code into a Starlark program.
+func (e *CompiledTemplate) compile(
+	globals starlark.StringDict,
+) (*starlark.Program, error) {
+	f, err := syntax.Parse(e.name, e.CodeAsString(), syntax.BlockScanner)
+	if err != nil {
+		return nil, err
+	}
+
+	NewProgramAST(f, e.instructions).InsertTplCtxs()
+
+	return starlark.FileProgram(f, globals.Has)
 }
 
 func (e *CompiledTemplate) hidePrivateGlobals(globals starlark.StringDict) {
