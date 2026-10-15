@@ -41,6 +41,7 @@ type templateKind string
 
 const (
 	starlarkTemplate templateKind = "starlark"
+	textTemplate     templateKind = "text"
 	yamlTemplate     templateKind = "yaml"
 )
 

@@ -241,7 +241,48 @@ func (l *TemplateLoader) compileYAML(
 	return compiledTemplate, nil, nil
 }
 
-func (l *TemplateLoader) EvalText(libraryCtx LibraryExecutionContext, file *files.File) (starlark.StringDict, *texttemplate.NodeRoot, error) {
+// EvalText evaluates a text file. Returns the file's text, templated when the
+// file is a template or a library.
+func (l *TemplateLoader) EvalText(
+	libraryCtx LibraryExecutionContext, file *files.File,
+) (starlark.StringDict, *texttemplate.NodeRoot, error) {
+	key := newTemplateKey(textTemplate, file, l.opts)
+	cache := l.libraryExecFactory.templateCache
+
+	compiledTemplate, cached := cache.lookupTemplate(key)
+	if !cached {
+		var plainRootNode *texttemplate.NodeRoot
+		var err error
+		compiledTemplate, plainRootNode, err = l.compileText(file)
+		if compiledTemplate == nil { // plain text, or an error
+			return nil, plainRootNode, err
+		}
+	}
+
+	globals, resultVal, err := l.evalTemplate(
+		libraryCtx, file, compiledTemplate)
+	if err != nil {
+		return nil, nil, fmt.Errorf("Evaluating text template: %s", err)
+	}
+
+	rootNode, ok := resultVal.(*texttemplate.NodeRoot)
+	if !ok {
+		return nil, nil, fmt.Errorf("Expected text template '%s' to produce "+
+			"text, got %T", file.RelativePath(), resultVal)
+	}
+
+	if !cached {
+		cache.storeTemplate(key, compiledTemplate)
+	}
+	return globals, rootNode, nil
+}
+
+// compileText parses file and compiles it into a text template. For a file
+// that is neither a template nor a library, it returns no template and the
+// file's text.
+func (l *TemplateLoader) compileText(
+	file *files.File,
+) (*template.CompiledTemplate, *texttemplate.NodeRoot, error) {
 	fileBs, err := file.Bytes()
 	if err != nil {
 		return nil, nil, err
@@ -251,7 +292,7 @@ func (l *TemplateLoader) EvalText(libraryCtx LibraryExecutionContext, file *file
 
 	if !file.IsTemplate() && !file.IsLibrary() {
 		plainRootNode := &texttemplate.NodeRoot{
-			Items: []interface{}{&texttemplate.NodeText{Content: string(fileBs)}},
+			Items: []any{&texttemplate.NodeText{Content: string(fileBs)}},
 		}
 		return nil, plainRootNode, nil
 	}
@@ -260,24 +301,23 @@ func (l *TemplateLoader) EvalText(libraryCtx LibraryExecutionContext, file *file
 
 	textRoot, err := texttemplate.NewParser().Parse(fileBs, file.RelativePath())
 	if err != nil {
-		return nil, nil, fmt.Errorf("Parsing text template '%s': %s", file.RelativePath(), err)
+		return nil, nil, fmt.Errorf("Parsing text template '%s': %s",
+			file.RelativePath(), err)
 	}
 
-	compiledTemplate, err := texttemplate.NewTemplate(file.RelativePath()).Compile(textRoot)
+	compiledTemplate, err := texttemplate.NewTemplate(
+		file.RelativePath()).Compile(textRoot)
 	if err != nil {
-		return nil, nil, fmt.Errorf("Compiling text template '%s': %s", file.RelativePath(), err)
+		return nil, nil, fmt.Errorf("Compiling text template '%s': %s",
+			file.RelativePath(), err)
 	}
-
-	globals, resultVal, err := l.evalTemplate(
-		libraryCtx, file, compiledTemplate)
-	if err != nil {
-		return nil, nil, fmt.Errorf("Evaluating text template: %s", err)
-	}
-
-	return globals, resultVal.(*texttemplate.NodeRoot), nil
+	return compiledTemplate, nil, nil
 }
 
-func (l *TemplateLoader) EvalStarlark(libraryCtx LibraryExecutionContext, file *files.File) (starlark.StringDict, error) {
+// EvalStarlark evaluates a Starlark file, and returns its globals.
+func (l *TemplateLoader) EvalStarlark(
+	libraryCtx LibraryExecutionContext, file *files.File,
+) (starlark.StringDict, error) {
 	key := newTemplateKey(starlarkTemplate, file, l.opts)
 	cache := l.libraryExecFactory.templateCache
 
