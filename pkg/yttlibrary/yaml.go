@@ -69,7 +69,9 @@ func (b yamlModule) Encode(goValue interface{}) (string, error) {
 }
 
 // Decode is a core.StarlarkFunc that parses the provided input from YAML format into dicts, lists, and scalars
-func (b yamlModule) starlarkDecode(_ *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
+func (yamlModule) starlarkDecode(thread *starlark.Thread,
+	_ *starlark.Builtin, args starlark.Tuple, _ []starlark.Tuple,
+) (starlark.Value, error) {
 	if args.Len() != 1 {
 		return starlark.None, fmt.Errorf("expected exactly one argument")
 	}
@@ -79,12 +81,12 @@ func (b yamlModule) starlarkDecode(_ *starlark.Thread, _ *starlark.Builtin, args
 		return starlark.None, err
 	}
 
-	value, err := b.Decode(valEncoded)
+	decoded, err := yamlDecodeCacheOf(thread).decode(valEncoded)
 	if err != nil {
 		return nil, err
 	}
 
-	return value, nil
+	return core.NewGoValue(decoded).AsStarlarkValue(), nil
 }
 
 func (b yamlModule) Decode(yamlString string) (starlark.Value, error) {
