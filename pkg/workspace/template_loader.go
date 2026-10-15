@@ -165,19 +165,63 @@ func (l *TemplateLoader) EvalPlainYAML(file *files.File) (*yamlmeta.DocumentSet,
 //
 // Returns the templated file by evaluating the compiled starlark program.
 func (l *TemplateLoader) EvalYAML(libraryCtx LibraryExecutionContext, file *files.File) (starlark.StringDict, *yamlmeta.DocumentSet, error) {
+	key := newTemplateKey(yamlTemplate, file, l.opts)
+	cache := l.libraryExecFactory.templateCache
+
+	if docSet, ok := cache.lookupPlainYAML(key); ok {
+		return nil, docSet, nil
+	}
+
+	compiledTemplate, cached := cache.lookupTemplate(key)
+	if !cached {
+		var docSet *yamlmeta.DocumentSet
+		var err error
+		compiledTemplate, docSet, err = l.compileYAML(file, key)
+		if compiledTemplate == nil { // plain YAML, or an error
+			return nil, docSet, err
+		}
+	}
+
+	globals, resultVal, err := l.evalTemplate(
+		libraryCtx, file, compiledTemplate)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	docSet, ok := resultVal.(*yamlmeta.DocumentSet)
+	if !ok {
+		return nil, nil, fmt.Errorf("Expected YAML template '%s' to produce "+
+			"documents, got %T", file.RelativePath(), resultVal)
+	}
+
+	if !cached {
+		cache.storeTemplate(key, compiledTemplate)
+	}
+	return globals, docSet, nil
+}
+
+// compileYAML parses file and compiles it into a YAML template. For a plain
+// YAML file, it returns no template and the file's documents, which it caches
+// under key.
+func (l *TemplateLoader) compileYAML(
+	file *files.File, key templateKey,
+) (*template.CompiledTemplate, *yamlmeta.DocumentSet, error) {
 	docSet, err := l.EvalPlainYAML(file)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// is this plain YAML?
-	if !file.IsTemplate() && !file.IsLibrary() || !yamltemplate.HasTemplating(docSet) {
+	if !file.IsTemplate() && !file.IsLibrary() ||
+		!yamltemplate.HasTemplating(docSet) {
 		// YAML spec requires map keys to be unique.
-		// Tools retain just the last instance: each subsequent map item overrides the value of any previous.
+		// Tools retain just the last instance: each subsequent map item
+		// overrides the value of any previous.
 		docSet.OverrideMapKeys()
 
 		l.ui.Debugf("### ast (plain)\n%s", debugAST{docSet})
 
+		l.libraryExecFactory.templateCache.storePlainYAML(key, docSet)
 		return nil, docSet, nil
 	}
 
@@ -188,18 +232,13 @@ func (l *TemplateLoader) EvalYAML(libraryCtx LibraryExecutionContext, file *file
 		ImplicitMapKeyOverrides: l.opts.ImplicitMapKeyOverrides,
 	}
 
-	compiledTemplate, err := yamltemplate.NewTemplate(file.RelativePath(), tplOpts).Compile(docSet)
+	compiledTemplate, err := yamltemplate.NewTemplate(
+		file.RelativePath(), tplOpts).Compile(docSet)
 	if err != nil {
-		return nil, nil, fmt.Errorf("Compiling YAML template '%s': %s", file.RelativePath(), err)
+		return nil, nil, fmt.Errorf("Compiling YAML template '%s': %s",
+			file.RelativePath(), err)
 	}
-
-	globals, resultVal, err := l.evalTemplate(
-		libraryCtx, file, compiledTemplate)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return globals, resultVal.(*yamlmeta.DocumentSet), nil
+	return compiledTemplate, nil, nil
 }
 
 func (l *TemplateLoader) EvalText(libraryCtx LibraryExecutionContext, file *files.File) (starlark.StringDict, *texttemplate.NodeRoot, error) {
