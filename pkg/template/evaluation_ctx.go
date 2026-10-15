@@ -36,6 +36,13 @@ type EvaluationNode interface {
 	DeepCopyAsInterface() interface{} // expects that result implements EvaluationNode
 }
 
+// valuelessCopier is optionally implemented by EvaluationNodes that can copy
+// themselves without their value/children. The result equals
+// DeepCopy()+ResetValue(), without copying the discarded subtree.
+type valuelessCopier interface {
+	CopyWithoutValueAsInterface() any
+}
+
 type EvaluationCtxDialect interface {
 	PrepareNode(parentNode EvaluationNode, val EvaluationNode) error
 	SetMapItemKey(node EvaluationNode, val interface{}) error
@@ -198,14 +205,36 @@ func (e *EvaluationCtx) TplStartNode(
 	return starlark.None, e.startNode(nodeTag)
 }
 
+// copyWithoutValue returns a copy of node without its value/children.
+func copyWithoutValue(node EvaluationNode) (EvaluationNode, error) {
+	var copied any
+	copier, valueless := node.(valuelessCopier)
+	if valueless {
+		copied = copier.CopyWithoutValueAsInterface()
+	} else {
+		copied = node.DeepCopyAsInterface()
+	}
+	nodeVal, ok := copied.(EvaluationNode)
+	if !ok {
+		return nil, fmt.Errorf("expected a copy of %T to be an EvaluationNode",
+			node)
+	}
+	if !valueless {
+		nodeVal.ResetValue()
+	}
+	return nodeVal, nil
+}
+
 func (e *EvaluationCtx) startNode(nodeTag NodeTag) error {
 	node, ok := e.nodes.FindNode(nodeTag)
 	if !ok {
 		return fmt.Errorf("expected to find %s", nodeTag)
 	}
 
-	nodeVal := node.DeepCopyAsInterface().(EvaluationNode)
-	nodeVal.ResetValue()
+	nodeVal, err := copyWithoutValue(node)
+	if err != nil {
+		return err
+	}
 
 	if nodeAnns, found := e.pendingAnnotations[nodeTag]; found {
 		delete(e.pendingAnnotations, nodeTag)
