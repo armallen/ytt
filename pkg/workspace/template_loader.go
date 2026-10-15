@@ -4,10 +4,12 @@
 package workspace
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
 	"carvel.dev/ytt/pkg/cmd/ui"
+	"carvel.dev/ytt/pkg/filepos"
 	"carvel.dev/ytt/pkg/files"
 	"carvel.dev/ytt/pkg/template"
 	"carvel.dev/ytt/pkg/template/core"
@@ -168,22 +170,18 @@ func (l *TemplateLoader) EvalYAML(libraryCtx LibraryExecutionContext, file *file
 		return nil, nil, err
 	}
 
-	l.ui.Debugf("### ast ")
-
 	// is this plain YAML?
 	if !file.IsTemplate() && !file.IsLibrary() || !yamltemplate.HasTemplating(docSet) {
 		// YAML spec requires map keys to be unique.
 		// Tools retain just the last instance: each subsequent map item overrides the value of any previous.
 		docSet.OverrideMapKeys()
 
-		l.ui.Debugf("(plain)\n")
-		docSet.Print(l.ui.DebugWriter())
+		l.ui.Debugf("### ast (plain)\n%s", debugAST{docSet})
 
 		return nil, docSet, nil
 	}
 
-	l.ui.Debugf("(templated)\n")
-	docSet.Print(l.ui.DebugWriter())
+	l.ui.Debugf("### ast (templated)\n%s", debugAST{docSet})
 
 	tplOpts := yamltemplate.TemplateOpts{
 		IgnoreUnknownComments:   l.opts.IgnoreUnknownComments,
@@ -195,16 +193,8 @@ func (l *TemplateLoader) EvalYAML(libraryCtx LibraryExecutionContext, file *file
 		return nil, nil, fmt.Errorf("Compiling YAML template '%s': %s", file.RelativePath(), err)
 	}
 
-	l.addCompiledTemplate(file.RelativePath(), compiledTemplate)
-	l.ui.Debugf("### template\n%s", compiledTemplate.DebugCodeAsString())
-
-	yttLibrary := yttlibrary.NewAPI(compiledTemplate.TplReplaceNode,
-		yttlibrary.NewDataModule(l.values, DataLoader{libraryCtx}),
-		NewLibraryModule(libraryCtx, l.libraryExecFactory, l.libraryValuess, l.librarySchemas).AsModule(), l.ui)
-
-	thread := l.newThread(libraryCtx, yttLibrary, file)
-
-	globals, resultVal, err := compiledTemplate.Eval(thread, l)
+	globals, resultVal, err := l.evalTemplate(
+		libraryCtx, file, compiledTemplate)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -227,6 +217,8 @@ func (l *TemplateLoader) EvalText(libraryCtx LibraryExecutionContext, file *file
 		return nil, plainRootNode, nil
 	}
 
+	fileBs = files.TrimUTF8BOM(fileBs)
+
 	textRoot, err := texttemplate.NewParser().Parse(fileBs, file.RelativePath())
 	if err != nil {
 		return nil, nil, fmt.Errorf("Parsing text template '%s': %s", file.RelativePath(), err)
@@ -237,16 +229,8 @@ func (l *TemplateLoader) EvalText(libraryCtx LibraryExecutionContext, file *file
 		return nil, nil, fmt.Errorf("Compiling text template '%s': %s", file.RelativePath(), err)
 	}
 
-	l.addCompiledTemplate(file.RelativePath(), compiledTemplate)
-	l.ui.Debugf("### template\n%s", compiledTemplate.DebugCodeAsString())
-
-	yttLibrary := yttlibrary.NewAPI(compiledTemplate.TplReplaceNode,
-		yttlibrary.NewDataModule(l.values, DataLoader{libraryCtx}),
-		NewLibraryModule(libraryCtx, l.libraryExecFactory, l.libraryValuess, l.librarySchemas).AsModule(), l.ui)
-
-	thread := l.newThread(libraryCtx, yttLibrary, file)
-
-	globals, resultVal, err := compiledTemplate.Eval(thread, l)
+	globals, resultVal, err := l.evalTemplate(
+		libraryCtx, file, compiledTemplate)
 	if err != nil {
 		return nil, nil, fmt.Errorf("Evaluating text template: %s", err)
 	}
@@ -255,6 +239,32 @@ func (l *TemplateLoader) EvalText(libraryCtx LibraryExecutionContext, file *file
 }
 
 func (l *TemplateLoader) EvalStarlark(libraryCtx LibraryExecutionContext, file *files.File) (starlark.StringDict, error) {
+	key := newTemplateKey(starlarkTemplate, file, l.opts)
+	cache := l.libraryExecFactory.templateCache
+
+	compiledTemplate, cached := cache.lookupTemplate(key)
+	if !cached {
+		var err error
+		compiledTemplate, err = l.compileStarlark(file)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	globals, _, err := l.evalTemplate(libraryCtx, file, compiledTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("Evaluating starlark template: %s", err)
+	}
+
+	if !cached {
+		cache.storeTemplate(key, compiledTemplate)
+	}
+	return globals, nil
+}
+
+func (l *TemplateLoader) compileStarlark(
+	file *files.File,
+) (*template.CompiledTemplate, error) {
 	fileBs, err := file.Bytes()
 	if err != nil {
 		return nil, err
@@ -262,26 +272,35 @@ func (l *TemplateLoader) EvalStarlark(libraryCtx LibraryExecutionContext, file *
 
 	l.ui.Debugf("## file %s\n", file.RelativePath())
 
+	fileBs = files.TrimUTF8BOM(fileBs)
+
 	instructions := template.NewInstructionSet()
 	compiledTemplate := template.NewCompiledTemplate(
-		file.RelativePath(), template.NewCodeFromBytes(fileBs, instructions),
+		file.RelativePath(), template.NewCodeFromBytesAtPosition(
+			fileBs,
+			filepos.NewPositionInFile(1, file.RelativePath()),
+			instructions),
 		instructions, template.NewNodes(), template.EvaluationCtxDialects{})
+	return compiledTemplate, nil
+}
 
-	l.addCompiledTemplate(file.RelativePath(), compiledTemplate)
-	l.ui.Debugf("### template\n%s", compiledTemplate.DebugCodeAsString())
+// evalTemplate evaluates tpl, compiled from file, in libraryCtx.
+func (l *TemplateLoader) evalTemplate(
+	libraryCtx LibraryExecutionContext,
+	file *files.File,
+	tpl *template.CompiledTemplate,
+) (starlark.StringDict, any, error) {
+	l.addCompiledTemplate(file.RelativePath(), tpl)
 
-	yttLibrary := yttlibrary.NewAPI(compiledTemplate.TplReplaceNode,
+	libraryModule := NewLibraryModule(libraryCtx, l.libraryExecFactory,
+		l.libraryValuess, l.librarySchemas)
+	yttLibrary := yttlibrary.NewAPI(tpl.TplReplaceNode,
 		yttlibrary.NewDataModule(l.values, DataLoader{libraryCtx}),
-		NewLibraryModule(libraryCtx, l.libraryExecFactory, l.libraryValuess, l.librarySchemas).AsModule(), l.ui)
+		libraryModule.AsModule(), l.ui)
 
 	thread := l.newThread(libraryCtx, yttLibrary, file)
 
-	globals, _, err := compiledTemplate.Eval(thread, l)
-	if err != nil {
-		return nil, fmt.Errorf("Evaluating starlark template: %s", err)
-	}
-
-	return globals, nil
+	return tpl.Eval(thread, l)
 }
 
 const (
@@ -338,6 +357,7 @@ func (l *TemplateLoader) newThread(libraryCtx LibraryExecutionContext,
 
 func (l *TemplateLoader) addCompiledTemplate(path string, ct *template.CompiledTemplate) {
 	l.compiledTemplates[path] = ct
+	l.ui.Debugf("### template\n%s", debugCode{ct})
 }
 
 func (opts TemplateLoaderOpts) Merge(overrides TemplateLoaderOptsOverrides) TemplateLoaderOpts {
@@ -352,4 +372,20 @@ func (opts TemplateLoaderOpts) Merge(overrides TemplateLoaderOptsOverrides) Temp
 		optsCopy.StrictYAML = *overrides.StrictYAML
 	}
 	return optsCopy
+}
+
+// debugCode defers building the compiled template dump until it is formatted,
+// so the work is skipped when debug output is disabled.
+type debugCode struct{ t *template.CompiledTemplate }
+
+func (d debugCode) String() string { return d.t.DebugCodeAsString() }
+
+// debugAST defers printing the parsed document set until it is formatted,
+// so the work is skipped when debug output is disabled.
+type debugAST struct{ ds *yamlmeta.DocumentSet }
+
+func (d debugAST) String() string {
+	var buf bytes.Buffer
+	d.ds.Print(&buf)
+	return buf.String()
 }
